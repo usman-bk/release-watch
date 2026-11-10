@@ -1,0 +1,31 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+scrape_configs:
+  - job_name: quote-api
+    dns_sd_configs:
+      - names:
+          - stable.quote-api.internal
+          - canary.quote-api.internal
+        type: A
+        port: 8000
+        refresh_interval: 15s
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        regex: (stable|canary)\..+
+        target_label: track
+
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090

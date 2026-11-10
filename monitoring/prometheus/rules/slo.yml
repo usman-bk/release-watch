@@ -1,0 +1,153 @@
+groups:
+  - name: quote-api-slo-recording
+    rules:
+      - record: job:http_errors:ratio_rate5m
+        expr: |
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote",code=~"5.."}[5m]))
+          /
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote"}[5m]))
+      - record: job:http_errors:ratio_rate30m
+        expr: |
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote",code=~"5.."}[30m]))
+          /
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote"}[30m]))
+      - record: job:http_errors:ratio_rate1h
+        expr: |
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote",code=~"5.."}[1h]))
+          /
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote"}[1h]))
+      - record: job:http_errors:ratio_rate2h
+        expr: |
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote",code=~"5.."}[2h]))
+          /
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote"}[2h]))
+      - record: job:http_errors:ratio_rate6h
+        expr: |
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote",code=~"5.."}[6h]))
+          /
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote"}[6h]))
+      - record: job:http_errors:ratio_rate1d
+        expr: |
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote",code=~"5.."}[1d]))
+          /
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote"}[1d]))
+      - record: job:http_errors:ratio_rate3d
+        expr: |
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote",code=~"5.."}[3d]))
+          /
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote"}[3d]))
+      - record: job:http_errors:ratio_rate30d
+        expr: |
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote",code=~"5.."}[30d]))
+          /
+          sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote"}[30d]))
+      - record: job:http_slow:ratio_rate5m
+        expr: |
+          1 - (
+            sum by (job) (rate(http_request_duration_seconds_bucket{job="quote-api",route="/api/quote",le="0.3"}[5m]))
+            /
+            sum by (job) (rate(http_request_duration_seconds_count{job="quote-api",route="/api/quote"}[5m]))
+          )
+      - record: job:http_slow:ratio_rate1h
+        expr: |
+          1 - (
+            sum by (job) (rate(http_request_duration_seconds_bucket{job="quote-api",route="/api/quote",le="0.3"}[1h]))
+            /
+            sum by (job) (rate(http_request_duration_seconds_count{job="quote-api",route="/api/quote"}[1h]))
+          )
+      - record: job:http_slow:ratio_rate30d
+        expr: |
+          1 - (
+            sum by (job) (rate(http_request_duration_seconds_bucket{job="quote-api",route="/api/quote",le="0.3"}[30d]))
+            /
+            sum by (job) (rate(http_request_duration_seconds_count{job="quote-api",route="/api/quote"}[30d]))
+          )
+      - record: job:error_budget:remaining_ratio30d
+        expr: 1 - job:http_errors:ratio_rate30d / 0.001
+      - record: job:latency_budget:remaining_ratio30d
+        expr: 1 - job:http_slow:ratio_rate30d / 0.01
+
+  # Burn rates and window pairs follow the Google SRE Workbook, chapter 5, table 5-8.
+  # The long window proves it matters. The short window lets the alert clear soon after recovery.
+  - name: quote-api-slo-alerts
+    rules:
+      - alert: ErrorBudgetBurnFast
+        expr: |
+          job:http_errors:ratio_rate1h > (14.4 * 0.001)
+          and
+          job:http_errors:ratio_rate5m > (14.4 * 0.001)
+        labels:
+          severity: page
+        annotations:
+          summary: Two percent of the monthly error budget went in an hour
+      - alert: ErrorBudgetBurnMedium
+        expr: |
+          job:http_errors:ratio_rate6h > (6 * 0.001)
+          and
+          job:http_errors:ratio_rate30m > (6 * 0.001)
+        labels:
+          severity: page
+        annotations:
+          summary: Five percent of the monthly error budget went in six hours
+      - alert: ErrorBudgetBurnSlow
+        expr: |
+          job:http_errors:ratio_rate1d > (3 * 0.001)
+          and
+          job:http_errors:ratio_rate2h > (3 * 0.001)
+        labels:
+          severity: ticket
+        annotations:
+          summary: Ten percent of the monthly error budget went in a day
+      - alert: ErrorBudgetBurnGradual
+        expr: |
+          job:http_errors:ratio_rate3d > (1 * 0.001)
+          and
+          job:http_errors:ratio_rate6h > (1 * 0.001)
+        labels:
+          severity: ticket
+        annotations:
+          summary: Ten percent of the monthly error budget went in three days
+      - alert: LatencyBudgetBurnFast
+        expr: |
+          job:http_slow:ratio_rate1h > (14.4 * 0.01)
+          and
+          job:http_slow:ratio_rate5m > (14.4 * 0.01)
+        labels:
+          severity: page
+        annotations:
+          summary: Too many quotes are taking longer than 300 ms
+
+  - name: quote-api-targets
+    rules:
+      - alert: StableTargetDown
+        expr: up{job="quote-api",track="stable"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: A stable task has stopped answering scrapes
+      - alert: StableTargetsMissing
+        expr: absent(up{job="quote-api",track="stable"})
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: Discovery is returning no stable tasks
+      - alert: QuoteApiNoTraffic
+        expr: sum by (job) (rate(http_requests_total{job="quote-api",route="/api/quote"}[10m])) == 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: The quote API has served nothing for 25 minutes
+
+  # Always firing. The heartbeat receiver alerts from outside if this stops arriving,
+  # which is how anyone finds out the monitoring itself has died.
+  - name: monitoring-heartbeat
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: heartbeat
+        annotations:
+          summary: The alerting pipeline is working

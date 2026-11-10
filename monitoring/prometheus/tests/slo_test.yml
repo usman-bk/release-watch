@@ -1,0 +1,256 @@
+rule_files:
+  - ../rules/slo.yml
+
+evaluation_interval: 1m
+fuzzy_compare: true
+
+tests:
+  - name: two percent errors pages on the fast burn
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v1",track="stable"}'
+        values: '0+980x120'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="503",version="v1",track="stable"}'
+        values: '0+20x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {job: quote-api, severity: page}
+            exp_annotations: {summary: Two percent of the monthly error budget went in an hour}
+
+  - name: one percent errors is too slow for the fast page but pages on the medium burn
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v1",track="stable"}'
+        values: '0+990x400'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="503",version="v1",track="stable"}'
+        values: '0+10x400'
+    alert_rule_test:
+      - eval_time: 390m
+        alertname: ErrorBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 390m
+        alertname: ErrorBudgetBurnMedium
+        exp_alerts:
+          - exp_labels: {job: quote-api, severity: page}
+            exp_annotations: {summary: Five percent of the monthly error budget went in six hours}
+
+  - name: half a percent opens a ticket and pages nobody
+    interval: 5m
+    input_series:
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v1",track="stable"}'
+        values: '0+995x320'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="503",version="v1",track="stable"}'
+        values: '0+5x320'
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: ErrorBudgetBurnMedium
+        exp_alerts: []
+      - eval_time: 25h
+        alertname: ErrorBudgetBurnSlow
+        exp_alerts:
+          - exp_labels: {job: quote-api, severity: ticket}
+            exp_annotations: {summary: Ten percent of the monthly error budget went in a day}
+
+  - name: a small steady overspend still opens a ticket
+    interval: 5m
+    input_series:
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v1",track="stable"}'
+        values: '0+9985x900'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="503",version="v1",track="stable"}'
+        values: '0+15x900'
+    alert_rule_test:
+      - eval_time: 73h
+        alertname: ErrorBudgetBurnSlow
+        exp_alerts: []
+      - eval_time: 73h
+        alertname: ErrorBudgetBurnGradual
+        exp_alerts:
+          - exp_labels: {job: quote-api, severity: ticket}
+            exp_annotations: {summary: Ten percent of the monthly error budget went in three days}
+
+  - name: spending inside the budget alerts nobody
+    interval: 5m
+    input_series:
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v1",track="stable"}'
+        values: '0+1999x900'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="503",version="v1",track="stable"}'
+        values: '0+1x900'
+    alert_rule_test:
+      - {eval_time: 73h, alertname: ErrorBudgetBurnFast, exp_alerts: []}
+      - {eval_time: 73h, alertname: ErrorBudgetBurnMedium, exp_alerts: []}
+      - {eval_time: 73h, alertname: ErrorBudgetBurnSlow, exp_alerts: []}
+      - {eval_time: 73h, alertname: ErrorBudgetBurnGradual, exp_alerts: []}
+
+  - name: a short outage pages and the page clears soon after recovery
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v1",track="stable"}'
+        values: '0+1000x120 120000+0x5 121000+1000x60'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="503",version="v1",track="stable"}'
+        values: '0+0x120 1000+1000x5 6000+0x60'
+    alert_rule_test:
+      - eval_time: 125m
+        alertname: ErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {job: quote-api, severity: page}
+            exp_annotations: {summary: Two percent of the monthly error budget went in an hour}
+      - eval_time: 135m
+        alertname: ErrorBudgetBurnFast
+        exp_alerts: []
+
+  - name: a process restart resetting its counters is not an outage
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v1",track="stable"}'
+        values: '0+1000x30 0+1000x30'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="503",version="v1",track="stable"}'
+        values: '0x30 0x30'
+    alert_rule_test:
+      - {eval_time: 45m, alertname: ErrorBudgetBurnFast, exp_alerts: []}
+
+  - name: errors are counted across the stable and canary tracks
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v1",track="stable"}'
+        values: '0+900x90'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v2",track="canary"}'
+        values: '0+80x90'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="503",version="v2",track="canary"}'
+        values: '0+20x90'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: ErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {job: quote-api, severity: page}
+            exp_annotations: {summary: Two percent of the monthly error budget went in an hour}
+
+  - name: traffic on other routes does not dilute the error ratio
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v1",track="stable"}'
+        values: '0+98x90'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="503",version="v1",track="stable"}'
+        values: '0+2x90'
+      - series: 'http_requests_total{job="quote-api",route="unmatched",code="404",version="v1",track="stable"}'
+        values: '0+100000x90'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: ErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {job: quote-api, severity: page}
+            exp_annotations: {summary: Two percent of the monthly error budget went in an hour}
+
+  - name: a burn is not reported when nobody is calling
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v1",track="stable"}'
+        values: '0x120'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="503",version="v1",track="stable"}'
+        values: '0x120'
+    alert_rule_test:
+      - {eval_time: 60m, alertname: ErrorBudgetBurnFast, exp_alerts: []}
+      - eval_time: 60m
+        alertname: QuoteApiNoTraffic
+        exp_alerts:
+          - exp_labels: {job: quote-api, severity: ticket}
+            exp_annotations: {summary: The quote API has served nothing for 25 minutes}
+
+  - name: slow quotes page and ordinary latency does not
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="quote-api",route="/api/quote",le="0.3",version="v1",track="stable"}'
+        values: '0+800x90'
+      - series: 'http_request_duration_seconds_count{job="quote-api",route="/api/quote",version="v1",track="stable"}'
+        values: '0+1000x90'
+      - series: 'http_request_duration_seconds_bucket{job="ok-copy",route="/api/quote",le="0.3",version="v1",track="stable"}'
+        values: '0+950x90'
+      - series: 'http_request_duration_seconds_count{job="ok-copy",route="/api/quote",version="v1",track="stable"}'
+        values: '0+1000x90'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: LatencyBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {job: quote-api, severity: page}
+            exp_annotations: {summary: Too many quotes are taking longer than 300 ms}
+
+  - name: five percent slow stays below the latency page
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="quote-api",route="/api/quote",le="0.3",version="v1",track="stable"}'
+        values: '0+950x90'
+      - series: 'http_request_duration_seconds_count{job="quote-api",route="/api/quote",version="v1",track="stable"}'
+        values: '0+1000x90'
+    alert_rule_test:
+      - {eval_time: 80m, alertname: LatencyBudgetBurnFast, exp_alerts: []}
+
+  - name: a stable task that stops answering pages after two minutes
+    interval: 1m
+    input_series:
+      - series: 'up{job="quote-api",track="stable",instance="10.0.1.5:8000"}'
+        values: '1x10 0x10'
+      - series: 'up{job="quote-api",track="canary",instance="10.0.1.9:8000"}'
+        values: '0x20'
+    alert_rule_test:
+      - {eval_time: 12m, alertname: StableTargetDown, exp_alerts: []}
+      - eval_time: 14m
+        alertname: StableTargetDown
+        exp_alerts:
+          - exp_labels: {job: quote-api, track: stable, instance: "10.0.1.5:8000", severity: page}
+            exp_annotations: {summary: A stable task has stopped answering scrapes}
+
+  - name: discovery finding no stable task pages
+    interval: 1m
+    input_series:
+      - series: 'up{job="quote-api",track="canary",instance="10.0.1.9:8000"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: StableTargetsMissing
+        exp_alerts:
+          - exp_labels: {job: quote-api, track: stable, severity: page}
+            exp_annotations: {summary: Discovery is returning no stable tasks}
+
+  - name: a brief blip of errors is not worth waking anyone
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v1",track="stable"}'
+        values: '0+1000x100 100950+950x4'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="503",version="v1",track="stable"}'
+        values: '0x100 50+50x4'
+    alert_rule_test:
+      - {eval_time: 105m, alertname: ErrorBudgetBurnFast, exp_alerts: []}
+
+  - name: a brief blip of slow quotes is not worth waking anyone
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="quote-api",route="/api/quote",le="0.3",version="v1",track="stable"}'
+        values: '0+1000x100 100700+700x4'
+      - series: 'http_request_duration_seconds_count{job="quote-api",route="/api/quote",version="v1",track="stable"}'
+        values: '0+1000x100 101000+1000x4'
+    alert_rule_test:
+      - {eval_time: 105m, alertname: LatencyBudgetBurnFast, exp_alerts: []}
+
+  - name: the heartbeat always fires
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels: {severity: heartbeat}
+            exp_annotations: {summary: The alerting pipeline is working}
+
+  - name: budget remaining is a share of the monthly allowance
+    interval: 1h
+    input_series:
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="200",version="v1",track="stable"}'
+        values: '0+1999x720'
+      - series: 'http_requests_total{job="quote-api",route="/api/quote",code="503",version="v1",track="stable"}'
+        values: '0+1x720'
+    promql_expr_test:
+      - expr: round(job:error_budget:remaining_ratio30d, 0.01)
+        eval_time: 720h
+        exp_samples:
+          - labels: '{job="quote-api"}'
+            value: 0.5

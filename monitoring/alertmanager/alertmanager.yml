@@ -1,0 +1,35 @@
+route:
+  receiver: ticket
+  group_by: [alertname, job]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="heartbeat"]
+      receiver: heartbeat
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 1m
+    - matchers: [severity="page"]
+      receiver: pager
+      repeat_interval: 1h
+
+# When something is paging, the slower tickets about the same job are noise.
+inhibit_rules:
+  - source_matchers: [severity="page"]
+    target_matchers: [severity="ticket"]
+    equal: [job]
+
+receivers:
+  - name: pager
+    webhook_configs:
+      - url_file: /run/secrets/pager_url
+        send_resolved: true
+  - name: ticket
+    webhook_configs:
+      - url_file: /run/secrets/ticket_url
+        send_resolved: true
+  - name: heartbeat
+    webhook_configs:
+      - url_file: /run/secrets/heartbeat_url
+        send_resolved: false
