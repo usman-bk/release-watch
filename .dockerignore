@@ -1,0 +1,6 @@
+.git
+.venv
+.tools
+infra
+tests
+monitoring/prometheus/tests

@@ -1,0 +1,2 @@
+FROM prom/alertmanager:v0.35.0
+COPY alertmanager/alertmanager.yml /etc/alertmanager/alertmanager.yml

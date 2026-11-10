@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen --python 3.13
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - name: Fetch Prometheus, Alertmanager and Grafana
+        run: ./scripts/fetch-tools.sh
+      - name: Check the shipped monitoring config
+        run: |
+          .tools/prometheus/promtool check config monitoring/prometheus/prometheus.yml
+          .tools/alertmanager/amtool check-config monitoring/alertmanager/alertmanager.yml
+      - name: Test the alert rules
+        run: .tools/prometheus/promtool test rules monitoring/prometheus/tests/slo_test.yml
+      - name: Unit and integration tests
+        run: uv run pytest
+
+  infra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.4
+          terraform_wrapper: false
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.64.0
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      - run: terraform test
+      - run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - run: tflint --recursive --config="$PWD/.tflint.hcl" --minimum-failure-severity=warning
+      - name: Scan for high and critical misconfiguration
+        working-directory: .
+        env:
+          TRIVY_VERSION: 0.75.0
+        run: |
+          base="https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION"
+          file="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSLO "$base/$file"
+          curl -fsSL "$base/trivy_${TRIVY_VERSION}_checksums.txt" | grep " $file\$" | sha256sum -c -
+          tar -xzf "$file" trivy
+          ./trivy config infra --severity HIGH,CRITICAL --exit-code 1
+
+  image:
+    # The ECS tasks and the monitoring host are ARM, so the images are built and run on ARM.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/smoke-images.sh
