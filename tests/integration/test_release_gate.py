@@ -130,7 +130,10 @@ def test_the_command_line_holds_and_exits_3_when_prometheus_is_unreachable():
 
 def test_the_command_line_asks_the_real_prometheus(stack):
     bring_up(stack)
-    wait_until(lambda: stack.query("increase(http_requests_total[1m])"), 15, "two scrapes")
+    both_tracks = (
+        'count(sum by (track) (increase(http_requests_total{route="/api/quote"}[1m]))) == 2'
+    )
+    wait_until(lambda: stack.query(both_tracks), 15, "two scrapes of both tracks")
     result = gate("check", "--prometheus", stack.prometheus_url, "--version", "v2")
     assert result.returncode == 3
     assert "too few" in result.stdout
