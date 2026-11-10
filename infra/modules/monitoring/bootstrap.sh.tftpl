@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Runs once on first boot of the monitoring host.
+set -euo pipefail
+
+export AWS_DEFAULT_REGION="${region}"
+DATA_DIR="$${DATA_DIR:-/data}"
+SECRETS_DIR="$${SECRETS_DIR:-/run/monitoring}"
+DISK="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$(echo "${volume_id}" | tr -d -)"
+
+wait_for_disk() {
+  local tries=0
+  until [ -b "$DISK" ]; do
+    tries=$((tries + 1))
+    if [ "$tries" -gt 120 ]; then
+      echo "data volume never appeared" >&2
+      exit 1
+    fi
+    sleep 5
+  done
+}
+
+# Formats only a blank disk. The disk outlives this host and holds the metrics.
+prepare_disk() {
+  if ! blkid "$DISK" >/dev/null 2>&1; then
+    mkfs.ext4 -L monitoring "$DISK"
+  fi
+  mkdir -p "$DATA_DIR"
+  mount "$DISK" "$DATA_DIR"
+  mkdir -p "$DATA_DIR/prometheus" "$DATA_DIR/alertmanager" "$DATA_DIR/grafana"
+  chown -R 65534:65534 "$DATA_DIR/prometheus" "$DATA_DIR/alertmanager"
+  chown -R 472:472 "$DATA_DIR/grafana"
+}
+
+read_secret() { # secret name, file name, owner
+  local target="$SECRETS_DIR/$2"
+  (umask 077 && aws secretsmanager get-secret-value --secret-id "${name}/$1" \
+    --query SecretString --output text >"$target")
+  chown "$3" "$target"
+}
+
+read_secrets() {
+  mkdir -p "$SECRETS_DIR"
+  chmod 755 "$SECRETS_DIR"
+  read_secret pager_url pager_url 65534:65534
+  read_secret ticket_url ticket_url 65534:65534
+  read_secret heartbeat_url heartbeat_url 65534:65534
+  read_secret grafana_password grafana_password 472:472
+}
+
+start_containers() {
+  aws ecr get-login-password | docker login --username AWS --password-stdin "$(echo "${prometheus_image}" | cut -d/ -f1)"
+  docker network create monitoring
+
+  docker run -d --name prometheus --restart=always --network monitoring \
+    -p 127.0.0.1:9090:9090 \
+    -v "$DATA_DIR/prometheus:/prometheus" \
+    "${prometheus_image}" \
+    --config.file=/etc/prometheus/prometheus.yml \
+    --storage.tsdb.path=/prometheus \
+    --storage.tsdb.retention.time=35d
+
+  docker run -d --name alertmanager --restart=always --network monitoring \
+    -v "$DATA_DIR/alertmanager:/alertmanager" \
+    -v "$SECRETS_DIR:/run/secrets:ro" \
+    "${alertmanager_image}" \
+    --config.file=/etc/alertmanager/alertmanager.yml \
+    --storage.path=/alertmanager
+
+  docker run -d --name grafana --restart=always --network monitoring \
+    -p 127.0.0.1:3000:3000 \
+    -v "$DATA_DIR/grafana:/var/lib/grafana" \
+    -v "$SECRETS_DIR:/run/secrets:ro" \
+    -e PROMETHEUS_URL=http://prometheus:9090 \
+    -e GRAFANA_DASHBOARDS=/etc/grafana/dashboards \
+    -e GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_password \
+    -e GF_ANALYTICS_REPORTING_ENABLED=false \
+    "${grafana_image}"
+}
+
+main() {
+  dnf install -y docker
+  systemctl enable --now docker
+  wait_for_disk
+  prepare_disk
+  read_secrets
+  start_containers
+}
+
+# Sourced by the tests, which call the functions one at a time.
+if [ "$${BOOTSTRAP_TEST:-}" != "1" ]; then
+  main
+fi
