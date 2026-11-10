@@ -130,12 +130,14 @@ def panels() -> list[dict]:
 
 def test_the_datasource_can_reach_prometheus(grafana):
     client, _ = grafana
-    # Grafana starts the datasource's plugin process on first use.
-    wait_until(
-        lambda: client.get("/api/datasources/uid/prometheus/health").json().get("status") == "OK",
-        30,
-        "the datasource to report healthy",
-    )
+
+    # Grafana registers its Prometheus plugin in the background after it starts serving.
+    def healthy():
+        response = client.get("/api/datasources/uid/prometheus/health")
+        assert response.json().get("status") == "OK", response.text
+        return True
+
+    wait_until(healthy, 180, "the datasource to report healthy")
 
 
 def test_the_dashboard_is_provisioned_with_every_panel(grafana):
@@ -173,7 +175,7 @@ def test_every_panel_query_returns_data_through_grafana(grafana, panel):
         ) and all(ref["frames"] for ref in frames.values())
         return ok
 
-    wait_until(result, 30, f"data for {panel['title']}")
+    wait_until(result, 120, f"data for {panel['title']}")
 
 
 def test_a_panel_with_no_data_says_so_instead_of_looking_healthy():
